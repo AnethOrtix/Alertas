@@ -1,14 +1,12 @@
 package com.example.alertas
 
-import android.Manifest
 import android.bluetooth.BluetoothAdapter
 import android.bluetooth.BluetoothDevice
+import android.bluetooth.BluetoothManager
 import android.bluetooth.le.*
 import android.content.Context
 import android.os.Handler
-import android.os.Looper
-import android.util.Log
-import androidx.annotation.RequiresPermission
+import android.widget.Toast
 import java.util.*
 
 class BeaconListener(
@@ -16,53 +14,48 @@ class BeaconListener(
     private val onBeaconDetected: () -> Unit
 ) {
 
+    private val bluetoothAdapter: BluetoothAdapter by lazy {
+        val bluetoothManager = context.getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager
+        bluetoothManager.adapter
+    }
 
-    private val bluetoothAdapter: BluetoothAdapter? = BluetoothAdapter.getDefaultAdapter()
-    private val scanner: BluetoothLeScanner? = bluetoothAdapter?.bluetoothLeScanner
-    private val handler = Handler(Looper.getMainLooper())
-
-    private val targetDeviceName = "FSC-BP107D"
-    private val targetMacAddress = "DC:0D:30:1E:79:28"
+    private val scanner: BluetoothLeScanner? get() = bluetoothAdapter.bluetoothLeScanner
+    private var isScanning = false
+    private var detectionCooldown = false
 
     private val scanCallback = object : ScanCallback() {
-        @RequiresPermission(allOf = [Manifest.permission.BLUETOOTH_CONNECT, Manifest.permission.BLUETOOTH_SCAN])
-        override fun onScanResult(callbackType: Int, result: ScanResult) {
-            val device: BluetoothDevice = result.device
-            val deviceName = device.name
-            val deviceAddress = device.address
+        override fun onScanResult(callbackType: Int, result: ScanResult?) {
+            result?.device?.let { device ->
+                val mac = device.address
+                val name = device.name ?: "Desconocido"
 
-            Log.d("BLE", "Dispositivo detectado: $deviceName, $deviceAddress")
-
-            if (deviceName == targetDeviceName && deviceAddress == targetMacAddress) {
-                Log.d("BLE", "✅ Pulsera detectada")
-                stopScan() // Detenemos el escaneo al detectar la pulsera
-                onBeaconDetected()
+                if (mac == "DC:0D:30:1E:79:28" || name.lowercase(Locale.ROOT).contains("eddystone")) {
+                    if (!detectionCooldown) {
+                        detectionCooldown = true
+                        Toast.makeText(context, "Se detectó la pulsera BLE", Toast.LENGTH_SHORT).show()
+                        onBeaconDetected()
+                        Handler().postDelayed({ detectionCooldown = false }, 5000)
+                    }
+                }
             }
         }
 
         override fun onScanFailed(errorCode: Int) {
-            Log.e("BLE", "❌ Falló el escaneo BLE: $errorCode")
+            Toast.makeText(context, "Error en escaneo BLE: $errorCode", Toast.LENGTH_LONG).show()
         }
     }
 
-    @RequiresPermission(Manifest.permission.BLUETOOTH_SCAN)
     fun startScan() {
-        Log.d("BLE", "🔍 Iniciando escaneo BLE")
-        scanner?.startScan(null, buildScanSettings(), scanCallback)
-
-        // Paramos el escaneo después de 10 segundos para ahorrar batería
-        handler.postDelayed({ stopScan() }, 10000)
+        if (isScanning) return
+        scanner?.startScan(scanCallback)
+        isScanning = true
+        Toast.makeText(context, "Escaneo BLE iniciado", Toast.LENGTH_SHORT).show()
     }
 
-    @RequiresPermission(Manifest.permission.BLUETOOTH_SCAN)
     fun stopScan() {
+        if (!isScanning) return
         scanner?.stopScan(scanCallback)
-        Log.d("BLE", "🛑 Escaneo detenido")
-    }
-
-    private fun buildScanSettings(): ScanSettings {
-        return ScanSettings.Builder()
-            .setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY)
-            .build()
+        isScanning = false
+        Toast.makeText(context, "Escaneo BLE detenido", Toast.LENGTH_SHORT).show()
     }
 }

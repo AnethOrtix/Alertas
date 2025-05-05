@@ -1,8 +1,10 @@
 package com.example.alertas
 
 import android.Manifest
+import android.bluetooth.BluetoothAdapter
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.location.Location
 import android.net.Uri
 import android.os.Bundle
@@ -25,21 +27,17 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import androidx.core.app.ActivityCompat
 import com.example.alertas.ui.theme.AlertasTheme
 import com.google.accompanist.permissions.*
 import com.google.android.gms.location.*
-import com.polidea.rxandroidble3.RxBleClient
-import com.polidea.rxandroidble3.scan.ScanRecord
-import io.reactivex.rxjava3.android.schedulers.AndroidSchedulers
-
 
 class MainActivity : ComponentActivity() {
 
-    private lateinit var rxBleClient: RxBleClient
+    private lateinit var beaconListener: BeaconListener
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        rxBleClient = RxBleClient.create(this)
 
         setContent {
             AlertasTheme {
@@ -47,55 +45,67 @@ class MainActivity : ComponentActivity() {
             }
         }
 
-        escanearDispositivoEddystone()
+        // Inicializamos el beaconListener con callback para enviar la alerta
+        beaconListener = BeaconListener(this) {
+            val mensaje = "¡Alerta activada desde la pulsera BLE!"
+            procesarYEnviarAlerta(this, mensaje)
+        }
+
+        // Verificar soporte y estado del Bluetooth
+        val bluetoothAdapter = BluetoothAdapter.getDefaultAdapter()
+        if (bluetoothAdapter == null) {
+            Toast.makeText(this, "Bluetooth no soportado", Toast.LENGTH_LONG).show()
+            return
+        }
+
+        if (!bluetoothAdapter.isEnabled) {
+            val enableBtIntent = Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE)
+            startActivityForResult(enableBtIntent, 1002)
+        }
+
+        // Solicitar permisos si no están otorgados
+        if (ActivityCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_SCAN) != PackageManager.PERMISSION_GRANTED ||
+            ActivityCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED ||
+            ActivityCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED
+        ) {
+            ActivityCompat.requestPermissions(
+                this,
+                arrayOf(
+                    Manifest.permission.BLUETOOTH_SCAN,
+                    Manifest.permission.BLUETOOTH_CONNECT,
+                    Manifest.permission.ACCESS_FINE_LOCATION
+                ),
+                1001
+            )
+        } else {
+            beaconListener.startScan()
+        }
     }
 
-    private fun escanearDispositivoEddystone() {
-        rxBleClient.scanBleDevices()
-            .observeOn(AndroidSchedulers.mainThread())
-            .subscribe({ resultadoEscaneo ->
-                val registroEscaneo = resultadoEscaneo.scanRecord
-                if (registroEscaneo != null) {
-                    val contenidoHex = scanRecordToHexString(registroEscaneo)
-                    Log.d("BLE", "Datos del BLE: $contenidoHex")
+    override fun onDestroy() {
+        super.onDestroy()
+        beaconListener.stopScan()
+    }
 
-                    if (contenidoHex.contains("10") && contenidoHex.contains("PHNSdm")) {
-                        Log.d("BLE", "Botón de pulsera BLE detectado")
-                        val mensaje = "¡Alerta activada desde la pulsera BLE!"
-                        procesarYEnviarAlerta(this, mensaje)
-                    }
-                } else {
-                    Log.w("BLE", "Resultado de escaneo sin registro")
-                }
-            }, { error ->
-                Log.e("BLE", "Error durante escaneo BLE: ${error.message}")
-            })
+    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<String>, grantResults: IntArray) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
 
-        // Función auxiliar para convertir el scanRecord a una cadena hexadecimal
-        fun scanRecordToHexString(scanRecord: ScanRecord): String {
-            val scanData = scanRecord.getBytes()
-            return scanData.joinToString(" ") { valor ->
-                "%02X".format(valor.toInt() and 0xFF)
+        if (requestCode == 1001) {
+            if (grantResults.all { it == PackageManager.PERMISSION_GRANTED }) {
+                Toast.makeText(this, "Permisos concedidos", Toast.LENGTH_SHORT).show()
+                beaconListener.startScan()
+            } else {
+                Toast.makeText(this, "Permisos necesarios no concedidos", Toast.LENGTH_LONG).show()
             }
         }
-
     }
-
-    fun scanRecordToHexString(scanRecord: ByteArray): String {
-        val hexString = StringBuilder()
-        for (byte in scanRecord) {
-            hexString.append(String.format("%02X ", byte))
-        }
-        return hexString.toString().trim()
-    }
-
-
 
     private fun procesarYEnviarAlerta(context: Context, mensajeBase: String) {
         obtenerUbicacionYEnviar(context, mensajeBase) { location ->
             val ubicacion = "Lat: ${location.latitude}, Lon: ${location.longitude}"
             val mensaje = "$mensajeBase\nUbicación: $ubicacion"
             enviarAlerta(context, mensaje)
+            enviarPorWhatsApp(context, mensaje)
             incrementarContadorAlertas(context)
         }
     }
@@ -226,7 +236,7 @@ class MainActivity : ComponentActivity() {
 
         Scaffold(
             topBar = {
-                TopAppBar(title = { Text("App de Alertas BLE") })
+                TopAppBar(title = { Text("Safe Band") })
             }
         ) { padding ->
             Column(
